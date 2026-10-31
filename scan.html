@@ -30,15 +30,29 @@ button{background:#0009;color:#fff;border:1px solid #fff6;border-radius:99px;pad
 <script>
 const $=s=>document.querySelector(s), v=$('#v'), m=$('#m');
 let stream=null, done=false, det=null;
-const back = txt => { try{ if(window.opener) window.opener.postMessage({type:'WHS2_SCAN',text:txt},'*'); }catch(e){} };
+const SID = location.hash.replace('#','');
+const back = txt => {
+  // ส่งซ้ำหลายรอบ เผื่อหน้าแอปต้นทางถูกพักอยู่เบื้องหลังบนมือถือ
+  if(!window.opener) return false;
+  let ok=false;
+  [0,400,900,1600].forEach(d=>setTimeout(()=>{try{window.opener.postMessage({type:'WHS2_SCAN',id:SID,text:txt},'*');}catch(e){}},d));
+  ok=true; return ok;
+};
 function beep(){try{const A=window.AudioContext||window.webkitAudioContext,c=new A(),o=c.createOscillator(),g=c.createGain();o.frequency.value=1040;g.gain.value=.25;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.13);}catch(e){}}
 function stop(){done=true;if(stream)stream.getTracks().forEach(t=>t.stop());}
 $('#x').onclick=()=>{stop();window.close();};
 function hit(txt){
   txt=String(txt||'').trim(); if(!txt||done) return;
-  done=true; back(txt); beep(); try{navigator.vibrate&&navigator.vibrate(60);}catch(e){}
-  document.body.classList.add('ok'); m.textContent='✓ '+txt;
-  setTimeout(()=>{stop();window.close();m.textContent='✓ '+txt+' (กลับไปที่แอป WHS2 ได้เลย)';},450);
+  done=true; beep(); try{navigator.vibrate&&navigator.vibrate(60);}catch(e){}
+  document.body.classList.add('ok'); stop();
+  const sent=back(txt);
+  if(sent){
+    m.textContent='✓ '+txt+' (ส่งกลับแอปแล้ว)';
+    setTimeout(()=>{window.close();},1900);
+  }else{
+    try{navigator.clipboard&&navigator.clipboard.writeText(txt);}catch(e){}
+    m.innerHTML='✓ '+txt.replace(/</g,'&lt;')+'<br>⚠ ส่งกลับแอปอัตโนมัติไม่ได้ (ไม่พบหน้าต้นทาง) คัดลอกค่าให้แล้ว ย้อนกลับไปวางในช่อง Location';
+  }
 }
 (async()=>{
   try{
