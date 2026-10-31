@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>สแกน QR Location</title>
+<style>
+:root{--p:#c8102e;--gl:#ffe08a}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#000;color:#fff;font:15px system-ui,'Noto Sans Thai',sans-serif;overflow:hidden}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+.box{position:fixed;left:50%;top:50%;width:min(72vw,330px);aspect-ratio:1;transform:translate(-50%,-50%);border-radius:16px;box-shadow:0 0 0 100vmax rgba(0,0,0,.58);transition:box-shadow .25s}
+.box i{position:absolute;width:38px;height:38px;border:0 solid var(--gl)}
+.box i:nth-child(1){top:-3px;left:-3px;border-top-width:5px;border-left-width:5px;border-top-left-radius:16px}
+.box i:nth-child(2){top:-3px;right:-3px;border-top-width:5px;border-right-width:5px;border-top-right-radius:16px}
+.box i:nth-child(3){bottom:-3px;left:-3px;border-bottom-width:5px;border-left-width:5px;border-bottom-left-radius:16px}
+.box i:nth-child(4){bottom:-3px;right:-3px;border-bottom-width:5px;border-right-width:5px;border-bottom-right-radius:16px}
+.box b{position:absolute;left:6%;right:6%;height:3px;border-radius:3px;background:linear-gradient(90deg,transparent,var(--p),transparent);box-shadow:0 0 10px var(--p);animation:l 1.8s ease-in-out infinite alternate}
+@keyframes l{from{top:6%}to{top:92%}}
+body.ok .box{box-shadow:0 0 0 100vmax rgba(22,101,52,.65)}body.ok .box i{border-color:#4ade80}body.ok .box b{display:none}
+.top,.bot{position:fixed;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;z-index:2}
+.top{top:0;padding-top:max(12px,env(safe-area-inset-top))}
+.bot{bottom:0;flex-direction:column;gap:10px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+button{background:#0009;color:#fff;border:1px solid #fff6;border-radius:99px;padding:8px 16px;font-size:15px}
+.top button{width:44px;height:44px;padding:0;font-size:20px}
+#m{text-align:center;text-shadow:0 1px 4px #000;word-break:break-all;padding:0 12px}
+</style></head><body>
+<video id="v" playsinline muted autoplay></video>
+<div class="box"><i></i><i></i><i></i><i></i><b></b></div>
+<div class="top"><button id="x" aria-label="ปิด">✕</button><b>สแกน QR Location</b><button id="t" aria-label="ไฟฉาย" style="visibility:hidden">🔦</button></div>
+<div class="bot"><div id="m">กำลังเปิดกล้อง...</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+const $=s=>document.querySelector(s), v=$('#v'), m=$('#m');
+let stream=null, done=false, det=null;
+const back = txt => { try{ if(window.opener) window.opener.postMessage({type:'WHS2_SCAN',text:txt},'*'); }catch(e){} };
+function beep(){try{const A=window.AudioContext||window.webkitAudioContext,c=new A(),o=c.createOscillator(),g=c.createGain();o.frequency.value=1040;g.gain.value=.25;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.13);}catch(e){}}
+function stop(){done=true;if(stream)stream.getTracks().forEach(t=>t.stop());}
+$('#x').onclick=()=>{stop();window.close();};
+function hit(txt){
+  txt=String(txt||'').trim(); if(!txt||done) return;
+  done=true; back(txt); beep(); try{navigator.vibrate&&navigator.vibrate(60);}catch(e){}
+  document.body.classList.add('ok'); m.textContent='✓ '+txt;
+  setTimeout(()=>{stop();window.close();m.textContent='✓ '+txt+' (กลับไปที่แอป WHS2 ได้เลย)';},450);
+}
+(async()=>{
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+  }catch(e){ m.textContent='เปิดกล้องไม่ได้ ('+(e&&e.name||'error')+') กรุณาอนุญาตการใช้กล้องของเบราว์เซอร์'; return; }
+  v.srcObject=stream; try{await v.play();}catch(e){}
+  m.textContent='เล็งกล้องให้ QR อยู่ในกรอบ ระบบอ่านให้อัตโนมัติ';
+  try{
+    const tk=stream.getVideoTracks()[0],cp=(tk.getCapabilities&&tk.getCapabilities())||{};
+    if(cp.focusMode&&cp.focusMode.includes('continuous'))tk.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+    if(cp.torch){let on=false;const b=$('#t');b.style.visibility='visible';b.onclick=()=>{on=!on;tk.applyConstraints({advanced:[{torch:on}]}).catch(()=>{});b.style.background=on?'#d4a017':'#0009';};}
+  }catch(e){}
+  try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13']});}catch(e){det=null;}
+  const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});
+  let busy=false,last=0;
+  const tick=async t=>{
+    if(done)return; requestAnimationFrame(tick);
+    if(busy||t-last<110||v.readyState<2||!v.videoWidth)return; last=t; busy=true;
+    try{
+      let txt=null;
+      if(det){const r=await det.detect(v); if(r&&r.length) txt=r[0].rawValue;}
+      if(!txt&&window.jsQR){
+        const k=Math.min(1,720/Math.max(v.videoWidth,v.videoHeight));
+        cv.width=Math.round(v.videoWidth*k); cv.height=Math.round(v.videoHeight*k);
+        cx.drawImage(v,0,0,cv.width,cv.height);
+        const q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:'dontInvert'});
+        if(q&&q.data) txt=q.data;
+      }
+      if(txt) hit(txt);
+    }catch(e){}
+    busy=false;
+  };
+  requestAnimationFrame(tick);
+})();
+</script></body></html>
