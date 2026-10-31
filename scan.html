@@ -17,31 +17,53 @@ video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
 body.ok .box{box-shadow:0 0 0 100vmax rgba(22,101,52,.65)}body.ok .box i{border-color:#4ade80}body.ok .box b{display:none}
 .top,.bot{position:fixed;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;z-index:2}
 .top{top:0;padding-top:max(12px,env(safe-area-inset-top))}
-.bot{bottom:0;flex-direction:column;gap:10px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+.bot{bottom:0;flex-direction:column;gap:8px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
 button{background:#0009;color:#fff;border:1px solid #fff6;border-radius:99px;padding:8px 16px;font-size:15px}
 .top button{width:44px;height:44px;padding:0;font-size:20px}
 #m{text-align:center;text-shadow:0 1px 4px #000;word-break:break-all;padding:0 12px}
+#d{font-size:11px;opacity:.75;text-align:center;text-shadow:0 1px 3px #000}
 </style></head><body>
 <video id="v" playsinline muted autoplay></video>
 <div class="box"><i></i><i></i><i></i><i></i><b></b></div>
 <div class="top"><button id="x" aria-label="ปิด">✕</button><b>สแกน QR Location</b><button id="t" aria-label="ไฟฉาย" style="visibility:hidden">🔦</button></div>
-<div class="bot"><div id="m">กำลังเปิดกล้อง...</div></div>
+<div class="bot"><div id="m">กำลังเปิดกล้อง...</div><div id="d"></div><button id="p">📷 ถ่ายรูปแทน (ถ้าสแกนสดไม่ติด)</button></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
-const $=s=>document.querySelector(s), v=$('#v'), m=$('#m');
-let stream=null, done=false, det=null;
-const SID = location.hash.replace('#','');
-const back = txt => {
-  // ส่งซ้ำหลายรอบ เผื่อหน้าแอปต้นทางถูกพักอยู่เบื้องหลังบนมือถือ
+const VER='v4';
+const $=s=>document.querySelector(s), v=$('#v'), m=$('#m'), dbg=$('#d');
+const SID=location.hash.replace('#','');
+let stream=null, done=false, det=null, frames=0, lastErr='';
+
+const cv=document.createElement('canvas'), cx=cv.getContext('2d',{willReadFrequently:true});
+let zr=null;
+function zx(c){
+  if(!window.ZXing) return null;
+  try{
+    if(!zr){zr=new ZXing.MultiFormatReader();const h=new Map();
+      h.set(ZXing.DecodeHintType.TRY_HARDER,true);
+      h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.QR_CODE,ZXing.BarcodeFormat.CODE_128]);
+      zr.setHints(h);}
+    return zr.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)))).getText();
+  }catch(e){return null;}
+}
+function js(){
+  if(!window.jsQR) return null;
+  try{
+    const q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:'attemptBoth'});
+    return q&&q.data?q.data:null;
+  }catch(e){lastErr='jsQR:'+e.message;return null;}
+}
+
+const back=txt=>{
   if(!window.opener) return false;
-  let ok=false;
   [0,400,900,1600].forEach(d=>setTimeout(()=>{try{window.opener.postMessage({type:'WHS2_SCAN',id:SID,text:txt},'*');}catch(e){}},d));
-  ok=true; return ok;
+  return true;
 };
 function beep(){try{const A=window.AudioContext||window.webkitAudioContext,c=new A(),o=c.createOscillator(),g=c.createGain();o.frequency.value=1040;g.gain.value=.25;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.13);}catch(e){}}
 function stop(){done=true;if(stream)stream.getTracks().forEach(t=>t.stop());}
 $('#x').onclick=()=>{stop();window.close();};
+
 function hit(txt){
   txt=String(txt||'').trim(); if(!txt||done) return;
   done=true; beep(); try{navigator.vibrate&&navigator.vibrate(60);}catch(e){}
@@ -55,56 +77,70 @@ function hit(txt){
     m.innerHTML='✓ '+txt.replace(/</g,'&lt;')+'<br>⚠ ส่งกลับแอปอัตโนมัติไม่ได้ (ไม่พบหน้าต้นทาง) คัดลอกค่าให้แล้ว ย้อนกลับไปวางในช่อง Location';
   }
 }
+
+/* โหมดถ่ายรูป: ใช้กล้องของเครื่องถ่ายภาพคมๆ แล้วอ่านจากรูป */
+$('#p').onclick=()=>{
+  const f=document.createElement('input'); f.type='file'; f.accept='image/*'; f.capture='environment';
+  f.onchange=e=>{
+    const file=e.target.files[0]; if(!file) return;
+    m.textContent='กำลังอ่านจากรูป...';
+    const im=new Image();
+    im.onload=()=>{
+      for(const mx of [1600,1000,2400,700]){
+        const k=Math.min(1,mx/Math.max(im.naturalWidth,im.naturalHeight));
+        cv.width=Math.round(im.naturalWidth*k); cv.height=Math.round(im.naturalHeight*k);
+        cx.drawImage(im,0,0,cv.width,cv.height);
+        const txt=js()||zx(cv);
+        if(txt){ done=false; return hit(txt); }
+      }
+      m.textContent='อ่านจากรูปไม่ได้ ถ่ายใหม่ให้เห็น QR ใหญ่และคมชัด';
+    };
+    im.src=URL.createObjectURL(file);
+  };
+  f.click();
+};
+
 (async()=>{
+  setInterval(()=>{
+    if(done) return;
+    dbg.textContent=VER+' · กล้อง '+(v.videoWidth||0)+'x'+(v.videoHeight||0)+' · jsQR '+(window.jsQR?'พร้อม':'ไม่โหลด')+' · ZXing '+(window.ZXing?'พร้อม':'ไม่โหลด')+' · อ่านแล้ว '+frames+' เฟรม'+(lastErr?' · '+lastErr:'');
+  },500);
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
-  }catch(e){ m.textContent='เปิดกล้องไม่ได้ ('+(e&&e.name||'error')+') กรุณาอนุญาตการใช้กล้องของเบราว์เซอร์'; return; }
+  }catch(e){ m.textContent='เปิดกล้องไม่ได้ ('+(e&&e.name||'error')+') ใช้ปุ่มถ่ายรูปแทนได้'; return; }
   v.srcObject=stream; try{await v.play();}catch(e){}
-  m.textContent='เล็งกล้องให้ QR อยู่ในกรอบ ระบบอ่านให้อัตโนมัติ';
+  m.textContent='เล็งกล้องให้ QR อยู่ในกรอบ ห่างประมาณ 15-25 ซม.';
   try{
     const tk=stream.getVideoTracks()[0],cp=(tk.getCapabilities&&tk.getCapabilities())||{};
     if(cp.focusMode&&cp.focusMode.includes('continuous'))tk.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
     if(cp.torch){let on=false;const b=$('#t');b.style.visibility='visible';b.onclick=()=>{on=!on;tk.applyConstraints({advanced:[{torch:on}]}).catch(()=>{});b.style.background=on?'#d4a017':'#0009';};}
   }catch(e){}
   try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13']});}catch(e){det=null;}
-  const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});
-  let zr=null;
-  const zx=c=>{
-    if(!window.ZXing)return null;
-    try{
-      if(!zr){zr=new ZXing.MultiFormatReader();const h=new Map();h.set(ZXing.DecodeHintType.TRY_HARDER,true);h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.QR_CODE,ZXing.BarcodeFormat.CODE_128]);zr.setHints(h);}
-      return zr.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)))).getText();
-    }catch(e){return null;}
-  };
-  const js=()=>{
-    if(!window.jsQR)return null;
-    const q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:'dontInvert'});
-    return q&&q.data?q.data:null;
-  };
-  let busy=false,last=0,n=0;
+
+  let busy=false,last=0;
   const t0=Date.now();
   const tick=async t=>{
     if(done)return; requestAnimationFrame(tick);
-    if(busy||t-last<110||v.readyState<2||!v.videoWidth)return; last=t; busy=true; n++;
+    if(busy||t-last<120||v.readyState<2||!v.videoWidth)return; last=t; busy=true; frames++;
     try{
       let txt=null;
       if(det){const r=await det.detect(v); if(r&&r.length) txt=r[0].rawValue;}
       const W=v.videoWidth,H=v.videoHeight;
-      if(!txt){ // ครอปตรงกลาง (ตรงกรอบเล็ง) ใช้ความละเอียดเต็ม จับ QR ได้ละเอียดกว่าย่อทั้งภาพ
-        const sz=Math.round(Math.min(W,H)*0.7),k=Math.min(1,900/sz);
+      if(!txt){ // ครอปกลางภาพ ความละเอียดเต็ม
+        const sz=Math.round(Math.min(W,H)*0.75),k=Math.min(1,900/sz);
         cv.width=cv.height=Math.round(sz*k);
         cx.drawImage(v,(W-sz)/2,(H-sz)/2,sz,sz,0,0,cv.width,cv.height);
         txt=js()||zx(cv);
       }
-      if(!txt&&n%3===0){ // ทุก 3 รอบลองทั้งภาพ เผื่อ QR ไม่ได้อยู่กลางกรอบพอดี
+      if(!txt&&frames%3===0){ // ทั้งภาพ
         const k=Math.min(1,1100/Math.max(W,H));
         cv.width=Math.round(W*k);cv.height=Math.round(H*k);
         cx.drawImage(v,0,0,cv.width,cv.height);
         txt=js()||zx(cv);
       }
       if(txt) hit(txt);
-      else if(Date.now()-t0>5000&&!done) m.textContent='ภาพยังไม่ชัด ลองถอยมือถือออกห่าง QR ประมาณ 15-25 ซม. ให้กล้องโฟกัส';
-    }catch(e){}
+      else if(Date.now()-t0>5000&&!done) m.textContent='ยังอ่านไม่ได้ ลองขยับห่าง/ใกล้ให้ภาพคมชัด หรือกดถ่ายรูปแทน';
+    }catch(e){lastErr='err:'+(e&&e.message||e);}
     busy=false;
   };
   requestAnimationFrame(tick);
