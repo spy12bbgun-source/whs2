@@ -27,6 +27,7 @@ button{background:#0009;color:#fff;border:1px solid #fff6;border-radius:99px;pad
 <div class="top"><button id="x" aria-label="ปิด">✕</button><b>สแกน QR Location</b><button id="t" aria-label="ไฟฉาย" style="visibility:hidden">🔦</button></div>
 <div class="bot"><div id="m">กำลังเปิดกล้อง...</div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
 const $=s=>document.querySelector(s), v=$('#v'), m=$('#m');
 let stream=null, done=false, det=null;
@@ -56,7 +57,7 @@ function hit(txt){
 }
 (async()=>{
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
   }catch(e){ m.textContent='เปิดกล้องไม่ได้ ('+(e&&e.name||'error')+') กรุณาอนุญาตการใช้กล้องของเบราว์เซอร์'; return; }
   v.srcObject=stream; try{await v.play();}catch(e){}
   m.textContent='เล็งกล้องให้ QR อยู่ในกรอบ ระบบอ่านให้อัตโนมัติ';
@@ -67,21 +68,42 @@ function hit(txt){
   }catch(e){}
   try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13']});}catch(e){det=null;}
   const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});
-  let busy=false,last=0;
+  let zr=null;
+  const zx=c=>{
+    if(!window.ZXing)return null;
+    try{
+      if(!zr){zr=new ZXing.MultiFormatReader();const h=new Map();h.set(ZXing.DecodeHintType.TRY_HARDER,true);h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.QR_CODE,ZXing.BarcodeFormat.CODE_128]);zr.setHints(h);}
+      return zr.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)))).getText();
+    }catch(e){return null;}
+  };
+  const js=()=>{
+    if(!window.jsQR)return null;
+    const q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:'dontInvert'});
+    return q&&q.data?q.data:null;
+  };
+  let busy=false,last=0,n=0;
+  const t0=Date.now();
   const tick=async t=>{
     if(done)return; requestAnimationFrame(tick);
-    if(busy||t-last<110||v.readyState<2||!v.videoWidth)return; last=t; busy=true;
+    if(busy||t-last<110||v.readyState<2||!v.videoWidth)return; last=t; busy=true; n++;
     try{
       let txt=null;
       if(det){const r=await det.detect(v); if(r&&r.length) txt=r[0].rawValue;}
-      if(!txt&&window.jsQR){
-        const k=Math.min(1,720/Math.max(v.videoWidth,v.videoHeight));
-        cv.width=Math.round(v.videoWidth*k); cv.height=Math.round(v.videoHeight*k);
+      const W=v.videoWidth,H=v.videoHeight;
+      if(!txt){ // ครอปตรงกลาง (ตรงกรอบเล็ง) ใช้ความละเอียดเต็ม จับ QR ได้ละเอียดกว่าย่อทั้งภาพ
+        const sz=Math.round(Math.min(W,H)*0.7),k=Math.min(1,900/sz);
+        cv.width=cv.height=Math.round(sz*k);
+        cx.drawImage(v,(W-sz)/2,(H-sz)/2,sz,sz,0,0,cv.width,cv.height);
+        txt=js()||zx(cv);
+      }
+      if(!txt&&n%3===0){ // ทุก 3 รอบลองทั้งภาพ เผื่อ QR ไม่ได้อยู่กลางกรอบพอดี
+        const k=Math.min(1,1100/Math.max(W,H));
+        cv.width=Math.round(W*k);cv.height=Math.round(H*k);
         cx.drawImage(v,0,0,cv.width,cv.height);
-        const q=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height,{inversionAttempts:'dontInvert'});
-        if(q&&q.data) txt=q.data;
+        txt=js()||zx(cv);
       }
       if(txt) hit(txt);
+      else if(Date.now()-t0>5000&&!done) m.textContent='ภาพยังไม่ชัด ลองถอยมือถือออกห่าง QR ประมาณ 15-25 ซม. ให้กล้องโฟกัส';
     }catch(e){}
     busy=false;
   };
